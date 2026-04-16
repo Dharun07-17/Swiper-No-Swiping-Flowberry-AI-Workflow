@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flowberry-config
+  namespace: flowberry
+data:
+  DATABASE_URL: postgresql+psycopg2://flowberry:flowberry@postgres:5432/flowberry
+  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+  API_PREFIX: /api/v1
+  GEMINI_MODEL: gemini-2.5-flash
+  GEMINI_BASE_URL: https://generativelanguage.googleapis.com/v1beta
+  OLLAMA_URL: http://host.docker.internal:11434
+  OLLAMA_MODEL: llama2
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  VITE_API_BASE_URL: http://localhost:8000/api/v1

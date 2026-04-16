@@ -31,6 +31,7 @@ export default function IntegrationsPage() {
   const [checkResult, setCheckResult] = useState<string | null>(null);
   const [checkErrors, setCheckErrors] = useState<string[]>([]);
   const [deletePassword, setDeletePassword] = useState("");
+  const [connectingId, setConnectingId] = useState<string | null>(null);
 
   async function refresh() {
     const res = await api.get<{ data: IntegrationSummary[] }>("/integrations");
@@ -108,6 +109,23 @@ export default function IntegrationsPage() {
     }
   }
 
+  async function onConnect(id: string) {
+    setConnectingId(id);
+    setError(null);
+    try {
+      const res = await api.post<{ data: { auth_url: string } }>(`/integrations/${id}/oauth/start`);
+      const url = res.data.data.auth_url;
+      window.open(url, "_blank", "width=520,height=720");
+      setTimeout(() => {
+        refresh();
+        setConnectingId(null);
+      }, 3000);
+    } catch (e: any) {
+      setError(e?.response?.data?.error?.message ?? "Failed to start OAuth flow.");
+      setConnectingId(null);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -179,12 +197,26 @@ export default function IntegrationsPage() {
                 <p className="text-sm font-medium">{item.display_name}</p>
                 <p className="text-xs text-zinc-400">{item.provider}</p>
               </div>
-              <button
-                onClick={() => onDelete(item.id)}
-                className="rounded border border-red-600 px-3 py-1 text-xs text-red-400 hover:bg-red-950"
-              >
-                Delete
-              </button>
+              <div className="flex items-center gap-2">
+                {item.has_oauth_token ? (
+                  <span className="rounded bg-emerald-900/40 px-2 py-1 text-xs text-emerald-200">Connected</span>
+                ) : null}
+                {item.has_oauth_json && ["Google Drive", "Gmail", "Google Calendar"].includes(item.provider) ? (
+                  <button
+                    onClick={() => onConnect(item.id)}
+                    className="rounded bg-berry-700 px-2 py-1 text-xs text-white"
+                    disabled={connectingId === item.id}
+                  >
+                    {connectingId === item.id ? "Connecting..." : "Connect"}
+                  </button>
+                ) : null}
+                <button
+                  onClick={() => onDelete(item.id)}
+                  className="rounded border border-red-600 px-3 py-1 text-xs text-red-400 hover:bg-red-950"
+                >
+                  Delete
+                </button>
+              </div>
             </div>
           ))}
         </div>

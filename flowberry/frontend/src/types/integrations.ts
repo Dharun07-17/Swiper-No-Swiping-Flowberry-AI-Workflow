@@ -6,4 +6,5 @@ export interface IntegrationSummary {
   updated_at: string;
   has_oauth_json: boolean;
   has_api_key: boolean;
+  has_oauth_token: boolean;
 }

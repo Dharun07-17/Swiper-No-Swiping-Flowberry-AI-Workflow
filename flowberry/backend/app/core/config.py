@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     ollama_model: str = "llama2"
 
     otel_exporter_otlp_endpoint: str = "http://otel-collector:4317"
+    public_base_url: str = "http://localhost:8000"
+    frontend_public_url: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

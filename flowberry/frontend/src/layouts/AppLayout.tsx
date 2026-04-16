@@ -17,6 +17,7 @@ export default function AppLayout({ children }: PropsWithChildren) {
             <Link to="/workflows" className="text-zinc-200 hover:text-white">Workflows</Link>
             <Link to="/integrations" className="text-zinc-200 hover:text-white">Integrations</Link>
             <Link to="/logs" className="text-zinc-200 hover:text-white">Logs</Link>
+            <Link to="/security" className="text-zinc-200 hover:text-white">Security</Link>
             {role === "admin" ? <Link to="/admin" className="text-zinc-200 hover:text-white">Admin</Link> : null}
             <button onClick={clear} className="rounded border border-zinc-700 px-3 py-1 hover:bg-zinc-800">Logout</button>
           </nav>

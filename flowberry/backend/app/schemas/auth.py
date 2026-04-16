@@ -18,6 +18,10 @@ class MFARequest(BaseModel):
     otp_code: str = Field(min_length=6, max_length=6)
 
 
+class MFACodeRequest(BaseModel):
+    otp_code: str = Field(min_length=6, max_length=6)
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 

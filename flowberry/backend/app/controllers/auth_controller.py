@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user, CurrentUser
 from app.auth.tokens import build_tokens, hash_token, decode_refresh
-from app.auth.mfa import verify_totp
+import pyotp
+from app.auth.mfa import verify_totp, generate_totp_secret
 from app.core.config import settings
 from app.core.db import get_db
 from app.core.security import verify_password
@@ -13,7 +14,7 @@ from app.middleware.exception_middleware import AppException
 from app.models.refresh_token import RefreshToken
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.user_repository import UserRepository
-from app.schemas.auth import LoginRequest, RefreshRequest, MFARequest
+from app.schemas.auth import LoginRequest, RefreshRequest, MFARequest, MFACodeRequest
 from app.services.encryption_service import EncryptionService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -121,5 +122,64 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/me")
-def me(user: CurrentUser = Depends(get_current_user)):
-    return {"success": True, "data": {"id": user.user_id, "role": user.role}, "message": "Current user"}
+def me(user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    user_repo = UserRepository(db)
+    row = user_repo.get_by_id(user.user_id)
+    return {
+        "success": True,
+        "data": {"id": user.user_id, "role": user.role, "mfa_enabled": bool(row.mfa_enabled) if row else False},
+        "message": "Current user",
+    }
+
+
+@router.post("/mfa/setup")
+def mfa_setup(user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    user_repo = UserRepository(db)
+    row = user_repo.get_by_id(user.user_id)
+    if not row:
+        raise AppException("UNAUTHORIZED", "User not found", 401)
+    if row.mfa_enabled:
+        raise AppException("MFA_ALREADY_ENABLED", "MFA is already enabled", 400)
+
+    enc = EncryptionService()
+    if row.mfa_secret_encrypted:
+        secret = enc.decrypt(row.mfa_secret_encrypted)
+    else:
+        secret = generate_totp_secret()
+        row.mfa_secret_encrypted = enc.encrypt(secret)
+        db.commit()
+
+    try:
+        email = enc.decrypt(row.email_encrypted)
+    except Exception:
+        email = "user@flowberry.local"
+    issuer = settings.app_name
+    otpauth_url = pyotp.TOTP(secret).provisioning_uri(name=email, issuer_name=issuer)
+
+    return {
+        "success": True,
+        "data": {"secret": secret, "otpauth_url": otpauth_url},
+        "message": "MFA setup ready",
+    }
+
+
+@router.post("/mfa/enable")
+def mfa_enable(payload: MFACodeRequest, user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    user_repo = UserRepository(db)
+    row = user_repo.get_by_id(user.user_id)
+    if not row:
+        raise AppException("UNAUTHORIZED", "User not found", 401)
+    if row.mfa_enabled:
+        return {"success": True, "data": {"mfa_enabled": True}, "message": "MFA already enabled"}
+    if not row.mfa_secret_encrypted:
+        raise AppException("MFA_NOT_SETUP", "MFA setup is required first", 400)
+
+    enc = EncryptionService()
+    secret = enc.decrypt(row.mfa_secret_encrypted)
+    if not verify_totp(secret, payload.otp_code):
+        raise AppException("UNAUTHORIZED", "Invalid OTP", 401)
+
+    row.mfa_enabled = True
+    db.commit()
+
+    return {"success": True, "data": {"mfa_enabled": True}, "message": "MFA enabled"}

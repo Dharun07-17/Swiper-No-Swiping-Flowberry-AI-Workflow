@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-email
+  namespace: flowberry
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker-email
+  template:
+    metadata:
+      labels:
+        app: worker-email
+    spec:
+      containers:
+        - name: worker-email
+          image: flowberry-worker-email:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: flowberry-config
+            - secretRef:
+                name: flowberry-secrets
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-calendar
+  namespace: flowberry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-calendar
+  template:
+    metadata:
+      labels:
+        app: worker-calendar
+    spec:
+      containers:
+        - name: worker-calendar
+          image: flowberry-worker-calendar:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: flowberry-config
+            - secretRef:
+                name: flowberry-secrets

@@ -114,6 +114,10 @@ class WorkerConsumer:
             job.status = "dead_lettered"
             job.error_code = code
             job.error_message_sanitized = message[:500]
+            step = db.query(WorkflowStep).filter(WorkflowStep.id == job.workflow_step_id).first()
+            if step:
+                step.status = "failed"
+                step.completed_at = datetime.utcnow()
             db.commit()
 
             dlq = f"{queue_name}-dlq"

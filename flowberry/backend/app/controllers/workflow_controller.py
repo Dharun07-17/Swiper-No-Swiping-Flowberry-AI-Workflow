@@ -1,3 +1,4 @@
+import json
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -177,6 +178,15 @@ async def approve_email_step(
     step.status = "queued"
     db.commit()
 
+    draft_payload = None
+    if step.output_payload:
+        try:
+            parsed_output = json.loads(step.output_payload)
+            if isinstance(parsed_output, dict) and "draft" in parsed_output:
+                draft_payload = parsed_output.get("draft")
+        except Exception:
+            draft_payload = None
+
     publisher = QueuePublisherService()
     await publisher.publish_job(
         queue_name="email-send",
@@ -186,6 +196,7 @@ async def approve_email_step(
             "workflow_step_id": step_id,
             "idempotency_key": job.idempotency_key,
             "approve": True,
+            "draft": draft_payload,
         },
         idempotency_key=job.idempotency_key,
     )

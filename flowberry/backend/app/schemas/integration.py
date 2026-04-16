@@ -28,6 +28,7 @@ class IntegrationSummary(BaseModel):
     updated_at: datetime
     has_oauth_json: bool
     has_api_key: bool
+    has_oauth_token: bool
 
 
 class IntegrationDeleteRequest(BaseModel):
