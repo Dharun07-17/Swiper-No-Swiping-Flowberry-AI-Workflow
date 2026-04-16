@@ -66,12 +66,12 @@ if ($needsJwt -or $needsFernet) {
 }
 
 if ($NoBuild) {
-  docker compose up
+  docker compose up -d
 } else {
-  docker compose up --build
+  docker compose up -d --build
 }
 
 if (-not $NoSeed) {
   Write-Host "Seeding database..."
-  docker compose exec api python -m app.core.bootstrap
+  docker compose exec -T api python -m app.core.bootstrap
 }
