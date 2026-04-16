@@ -1,5 +1,7 @@
 import asyncio
+import csv
 import json
+import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -8,6 +10,7 @@ from app.core.db import db_manager
 from app.models.integration import Integration
 from app.models.workflow import Workflow
 from app.services.encryption_service import EncryptionService
+from app.services.ai_client import AIClient
 from app.workers.consumer_base import WorkerConsumer
 
 
@@ -25,10 +28,165 @@ class CalendarWorker(WorkerConsumer):
             return {"notification_status": "sent", "channel": "slack"}
 
         if queue_name == "csv-analysis":
-            await asyncio.sleep(1.0)
-            return {"rows": 128, "insight": "Top category is Operations"}
+            await asyncio.sleep(0.2)
+            csv_text = ""
+            input_payload = payload.get("input") or {}
+            if isinstance(input_payload, dict):
+                csv_text = input_payload.get("csv_text") or ""
+            if not csv_text:
+                csv_text = payload.get("csv_text") or ""
+            if not csv_text.strip():
+                raise ValueError("CSV text is empty")
+
+            analysis = self._analyze_csv(csv_text)
+            gemini_summary = await self._explain_csv_with_gemini(csv_text, analysis)
+            report_text = self._format_csv_report(csv_text, analysis, gemini_summary)
+            report_file = self._write_csv_report(payload, report_text)
+            try:
+                drive_info = await self._upload_report_to_drive(payload, report_text)
+            except Exception as exc:
+                drive_info = {"error": str(exc)}
+
+            return {
+                **analysis,
+                "gemini_summary": gemini_summary,
+                "report_file": report_file,
+                "drive": drive_info,
+            }
 
         raise ValueError(f"Unsupported queue {queue_name}")
+
+    def _analyze_csv(self, csv_text: str) -> dict:
+        if len(csv_text) > 1_000_000:
+            raise ValueError("CSV text is too large (max 1MB)")
+
+        reader = csv.reader(csv_text.splitlines())
+        rows = list(reader)
+        if not rows:
+            raise ValueError("CSV has no rows")
+
+        header = rows[0]
+        data_rows = rows[1:]
+        sample_rows = data_rows[:5]
+
+        return {
+            "row_count": len(data_rows),
+            "column_count": len(header),
+            "columns": header,
+            "sample_rows": sample_rows,
+        }
+
+    async def _explain_csv_with_gemini(self, csv_text: str, analysis: dict) -> str:
+        max_chars = 20000
+        excerpt = csv_text.strip()
+        truncated = False
+        if len(excerpt) > max_chars:
+            excerpt = excerpt[:max_chars]
+            truncated = True
+
+        prompt = (
+            "You are a data analyst. Explain this CSV in plain English. "
+            "Summarize what it contains, potential insights, and any data quality issues. "
+            "Use short paragraphs and bullet points.\n\n"
+            f"Metadata:\nRows: {analysis.get('row_count')}\n"
+            f"Columns: {analysis.get('column_count')}\n"
+            f"Headers: {', '.join(analysis.get('columns') or [])}\n\n"
+            "CSV (text):\n"
+            f"{excerpt}\n\n"
+        )
+        if truncated:
+            prompt += "\nNote: CSV content was truncated for length.\n"
+
+        ai = AIClient()
+        return await ai.generate_text(prompt)
+
+    def _format_csv_report(self, csv_text: str, analysis: dict, gemini_summary: str) -> str:
+        lines = [
+            "Flowberry CSV Report",
+            "",
+            f"Row count: {analysis.get('row_count')}",
+            f"Column count: {analysis.get('column_count')}",
+            f"Columns: {', '.join(analysis.get('columns') or [])}",
+            "",
+            "Gemini Summary:",
+            gemini_summary.strip() if gemini_summary else "No summary available.",
+            "",
+            "Sample rows:",
+        ]
+        for row in analysis.get("sample_rows") or []:
+            lines.append(", ".join(row))
+        lines.append("")
+        lines.append("Raw CSV:")
+        lines.append(csv_text.strip())
+        return "\n".join(lines)
+
+    def _write_csv_report(self, payload: dict, report_text: str) -> dict:
+        step_id = payload.get("workflow_step_id") or "unknown"
+        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        reports_dir = os.path.join(os.path.dirname(__file__), "..", "report_outputs")
+        reports_dir = os.path.normpath(reports_dir)
+        os.makedirs(reports_dir, exist_ok=True)
+        filename = f"csv_report_{step_id}_{ts}.txt"
+        path = os.path.join(reports_dir, filename)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(report_text)
+        size_bytes = os.path.getsize(path)
+        return {"path": path, "size_bytes": size_bytes}
+
+    async def _upload_report_to_drive(self, payload: dict, report_text: str) -> dict:
+        workflow_id = payload.get("workflow_id")
+        if not workflow_id:
+            raise ValueError("Missing workflow_id for Drive upload")
+
+        db = db_manager.get_session()
+        try:
+            workflow = db.query(Workflow).filter(Workflow.id == workflow_id).first()
+            if not workflow:
+                raise ValueError("Workflow not found for Drive upload")
+
+            integration = (
+                db.query(Integration)
+                .filter(Integration.user_id == workflow.user_id, Integration.provider == "Google Drive")
+                .order_by(Integration.updated_at.desc())
+                .first()
+            )
+            if not integration:
+                raise ValueError("No Google Drive integration found for user")
+
+            enc = EncryptionService()
+            creds = self._decrypt_credentials(enc, integration)
+            access_token = await self._get_access_token(db, integration, creds, "Google Drive")
+
+            step_id = payload.get("workflow_step_id") or "unknown"
+            ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            metadata = {"name": f"flowberry_csv_report_{step_id}_{ts}.txt", "mimeType": "text/plain"}
+            boundary = "flowberry_boundary"
+            body = (
+                f"--{boundary}\r\n"
+                "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+                f"{json.dumps(metadata)}\r\n"
+                f"--{boundary}\r\n"
+                "Content-Type: text/plain\r\n\r\n"
+                f"{report_text}\r\n"
+                f"--{boundary}--"
+            )
+
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": f"multipart/related; boundary={boundary}",
+            }
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink",
+                    headers=headers,
+                    content=body.encode("utf-8"),
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            return {"file_id": data.get("id"), "web_view_link": data.get("webViewLink")}
+        finally:
+            db.close()
 
     def _build_event(self, payload: dict) -> dict:
         prompt = (payload.get("prompt") or "").strip()
@@ -70,7 +228,7 @@ class CalendarWorker(WorkerConsumer):
 
             enc = EncryptionService()
             creds = self._decrypt_credentials(enc, integration)
-            access_token = await self._get_access_token(db, integration, creds)
+            access_token = await self._get_access_token(db, integration, creds, "Google Calendar")
 
             headers = {"Authorization": f"Bearer {access_token}"}
             async with httpx.AsyncClient(timeout=20) as client:
@@ -100,7 +258,7 @@ class CalendarWorker(WorkerConsumer):
             pass
         return {"oauth_json": "", "api_key": "", "oauth_tokens": {}}
 
-    async def _get_access_token(self, db, integration: Integration, creds: dict) -> str:
+    async def _get_access_token(self, db, integration: Integration, creds: dict, provider_label: str) -> str:
         tokens = creds.get("oauth_tokens") or {}
         access_token = tokens.get("access_token")
         expires_in = tokens.get("expires_in")
@@ -112,19 +270,19 @@ class CalendarWorker(WorkerConsumer):
         refresh_token = tokens.get("refresh_token")
         oauth_json = creds.get("oauth_json") or ""
         if not refresh_token or not oauth_json:
-            raise ValueError("Google Calendar OAuth tokens missing; connect the integration first")
+            raise ValueError(f"{provider_label} OAuth tokens missing; connect the integration first")
 
         try:
             parsed = json.loads(oauth_json)
         except Exception:
-            raise ValueError("Google Calendar OAuth JSON invalid")
+            raise ValueError(f"{provider_label} OAuth JSON invalid")
 
         config = parsed.get("web") or parsed.get("installed") or {}
         client_id = config.get("client_id")
         client_secret = config.get("client_secret")
         token_uri = config.get("token_uri")
         if not client_id or not client_secret or not token_uri:
-            raise ValueError("Google Calendar OAuth JSON missing required fields")
+            raise ValueError(f"{provider_label} OAuth JSON missing required fields")
 
         data = {
             "client_id": client_id,
@@ -151,7 +309,7 @@ class CalendarWorker(WorkerConsumer):
         db.commit()
 
         if not tokens.get("access_token"):
-            raise ValueError("Failed to refresh Google Calendar access token")
+            raise ValueError(f"Failed to refresh {provider_label} access token")
         return tokens["access_token"]
 
     def _infer_timezone(self, text: str) -> str:

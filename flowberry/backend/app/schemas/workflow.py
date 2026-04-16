@@ -6,6 +6,11 @@ class WorkflowCreateRequest(BaseModel):
     prompt: str
 
 
+class WorkflowCsvCreateRequest(BaseModel):
+    prompt: str
+    csv_text: str
+
+
 class WorkflowStepPayload(BaseModel):
     id: str
     step_order: int

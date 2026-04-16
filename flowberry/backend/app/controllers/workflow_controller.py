@@ -7,7 +7,7 @@ from app.core.db import get_db
 from app.middleware.exception_middleware import AppException
 from app.repositories.log_repository import LogRepository
 from app.repositories.workflow_repository import WorkflowRepository
-from app.schemas.workflow import WorkflowCreateRequest
+from app.schemas.workflow import WorkflowCreateRequest, WorkflowCsvCreateRequest
 from app.services.fizz_planning_service import FizzPlanningService
 from app.services.queue_publisher_service import QueuePublisherService
 from app.services.workflow_execution_service import WorkflowExecutionService
@@ -36,6 +36,34 @@ async def create_workflow(
     await publisher.close()
 
     return {"success": True, "data": data, "message": "Workflow created"}
+
+
+@router.post("/csv")
+async def create_csv_workflow(
+    payload: WorkflowCsvCreateRequest,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not payload.prompt.strip():
+        raise AppException("INVALID_PROMPT", "Prompt cannot be empty", 400)
+    if not payload.csv_text.strip():
+        raise AppException("INVALID_CSV", "CSV text cannot be empty", 400)
+    if len(payload.csv_text) > 1_000_000:
+        raise AppException("CSV_TOO_LARGE", "CSV text is too large (max 1MB)", 400)
+
+    planner = FizzPlanningService()
+    steps = planner._tools_to_steps(["csv"], payload.prompt)
+    if steps:
+        steps[0]["input"] = {"csv_text": payload.csv_text}
+
+    plan = {"intent_summary": payload.prompt.strip()[:160], "steps": steps}
+
+    publisher = QueuePublisherService()
+    executor = WorkflowExecutionService(db=db, publisher=publisher, observer=observer_singleton)
+    data = await executor.create_and_dispatch(user.user_id, payload.prompt, plan)
+    await publisher.close()
+
+    return {"success": True, "data": data, "message": "CSV workflow created"}
 
 
 @router.get("/{workflow_id}")

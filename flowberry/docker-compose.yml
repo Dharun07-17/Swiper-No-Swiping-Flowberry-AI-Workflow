@@ -74,6 +74,8 @@ services:
       - rabbitmq
     networks:
       - flowberry-net
+    volumes:
+      - ./backend/app/report_outputs:/app/app/report_outputs
 
   postgres:
     image: postgres:16-alpine

@@ -74,6 +74,19 @@ class WorkflowExecutionService:
         self.workflow_repo.create_jobs(jobs)
 
         for job in jobs:
+            step = next((s for s in steps if s.id == job.workflow_step_id), None)
+            step_input = None
+            step_tool = None
+            if step and step.input_payload:
+                try:
+                    parsed_input = json.loads(step.input_payload)
+                    if isinstance(parsed_input, dict):
+                        step_input = parsed_input.get("input")
+                        step_tool = parsed_input.get("tool")
+                except Exception:
+                    step_input = None
+                    step_tool = None
+
             await self.publisher.publish_job(
                 queue_name=job.queue_name,
                 payload={
@@ -82,6 +95,8 @@ class WorkflowExecutionService:
                     "workflow_step_id": job.workflow_step_id,
                     "idempotency_key": job.idempotency_key,
                     "prompt": prompt,
+                    "tool": step_tool,
+                    "input": step_input,
                 },
                 idempotency_key=job.idempotency_key,
             )

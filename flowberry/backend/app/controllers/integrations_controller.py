@@ -28,7 +28,7 @@ import httpx
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
 GOOGLE_SCOPES = {
-    "Google Drive": ["https://www.googleapis.com/auth/drive.readonly"],
+    "Google Drive": ["https://www.googleapis.com/auth/drive.file"],
     "Gmail": ["https://www.googleapis.com/auth/gmail.send"],
     "Google Calendar": ["https://www.googleapis.com/auth/calendar.events"],
 }
