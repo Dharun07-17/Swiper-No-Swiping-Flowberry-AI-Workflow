@@ -5,6 +5,7 @@ const { runHackerNews } = require("../tools/hackerNewsTool");
 const { runCSV }        = require("../tools/csvTool");
 const { runCalendar }   = require("../tools/calendarTool");
 const { runEmail }      = require("../tools/emailTool");
+const { runWebSearch }  = require("../tools/webSearchTool");
 
 function withTimeout(promise, ms, toolName) {
   const timeout = new Promise((_, reject) =>
@@ -38,44 +39,59 @@ function buildOllamaPrompt(originalInput, context, contextTool) {
 
     return `You are a data analyst. Analyze this CSV data and identify the top trends, patterns, and insights.
 
-CSV File Summary:
-- Total Rows: ${context.rowCount}
+CSV Summary:
+- Rows: ${context.rowCount}
 - Columns: ${(context.columns || []).join(", ")}
 
-Column Statistics:
+Statistics:
 ${statsText}
 
-Sample Data:
+Sample:
 ${sampleText}
 
-Please provide:
-1. Top 3-5 trends you see in this data
-2. Key insights about each column
-3. Any notable patterns or anomalies
-4. A brief recommendation based on the data
+Provide:
+1. Top 3-5 trends
+2. Key insights per column
+3. Notable patterns or anomalies
+4. Recommendations based on the data
 
-Be specific and reference the actual numbers from the data.`;
+Reference actual numbers.`;
+  }
+
+  if (contextTool === "websearch") {
+    const items = Array.isArray(context) ? context : [];
+    const contextStr = items.map((item, i) => {
+      if (item.type === "knowledge_graph") {
+        return `[Knowledge Graph] ${item.title}: ${item.description}`;
+      }
+      if (item.type === "question") {
+        return `[Q&A] ${item.question}\n  Answer: ${item.answer}`;
+      }
+      return `${i + 1}. ${item.title}\n   ${item.snippet || ""}\n   Source: ${item.source || item.url}`;
+    }).join("\n\n");
+
+    return `Based on these Google search results, provide a comprehensive answer to: "${originalInput}"\n\nSearch Results:\n${contextStr}`;
   }
 
   if (Array.isArray(context)) {
     const contextStr = context.map((item, i) =>
       item.title
-        ? `${i + 1}. ${item.title} — ${item.url || ""}`
+        ? `${i + 1}. ${item.title} (${item.url || ""})`
         : `${i + 1}. ${item.text || JSON.stringify(item)}`
     ).join("\n");
 
-    return `${originalInput}\n\nHere is the actual data retrieved:\n${contextStr}\n\nPlease summarize and analyze the above data specifically.`;
+    return `${originalInput}\n\nHere is the actual data retrieved:\n${contextStr}\n\nPlease summarize and analyze specifically.`;
   }
 
   return `${originalInput}\n\nContext:\n${JSON.stringify(context, null, 2)}`;
 }
 
 async function executeWorkflow(plan) {
-  const logs    = [];
-  const results = [];
+  const logs        = [];
+  const results     = [];
   let   context     = null;
   let   contextTool = null;
-  let   ollamaOutput = null;   // ← Track Ollama output separately
+  let   ollamaOutput = null;
 
   if (!plan || !Array.isArray(plan.steps)) {
     return {
@@ -120,6 +136,14 @@ async function executeWorkflow(plan) {
           contextTool = "csv";
           break;
         }
+        case "websearch":
+        case "search":
+        case "google": {
+          output      = await withTimeout(runWebSearch(input), 15000, "websearch");
+          context     = output;
+          contextTool = "websearch";
+          break;
+        }
         case "calendar":
         case "schedule": {
           output      = await withTimeout(runCalendar(input), 5000, "calendar");
@@ -127,22 +151,20 @@ async function executeWorkflow(plan) {
           contextTool = "calendar";
           break;
         }
-        case "ollama": {
-          const ollamaPrompt = buildOllamaPrompt(input, context, contextTool);
-          console.log(`[Executor] Ollama prompt type: ${contextTool || "direct"}`);
-          output       = await withTimeout(runOllama(ollamaPrompt), 120000, "ollama");
-          ollamaOutput = output;  // ← Save Ollama output for email
-          break;
-        }
         case "email": {
-          // Use Ollama summary if available, otherwise use raw context
           const emailBody = ollamaOutput || context;
-          console.log("[Executor] Email using:", ollamaOutput ? "Ollama summary" : "raw context");
           output = await withTimeout(
             runEmail({ body: input, context: emailBody }),
             5000,
             "email"
           );
+          break;
+        }
+        case "ollama": {
+          const ollamaPrompt = buildOllamaPrompt(input, context, contextTool);
+          console.log(`[Executor] Ollama prompt type: ${contextTool || "direct"}`);
+          output       = await withTimeout(runOllama(ollamaPrompt), 120000, "ollama");
+          ollamaOutput = output;
           break;
         }
         default:
