@@ -11,6 +11,10 @@ Flowberry is an **event-driven AI workflow automation platform** where natural l
 <img width="1919" height="851" alt="Screenshot 2026-04-17 035258" src="https://github.com/user-attachments/assets/cc6b86b2-8db2-4c82-ab21-edb9efe9c9f5" />
 <img width="1650" height="846" alt="Screenshot 2026-04-17 035010" src="https://github.com/user-attachments/assets/0dc76ca8-b4fc-4093-a723-55a8eb9f64e2" />
 
+
+
+
+
 ## Problem Statement
 
 Modern automation tools tightly couple request execution with backend APIs, leading to:
